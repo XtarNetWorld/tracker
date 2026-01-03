@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Virtual Room AR Scanner</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: Arial; }
+        canvas { display: block; }
+        #info { position: absolute; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.7); padding: 10px; z-index: 10; border-radius: 5px; max-width: 90%; }
+        button { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 15px 30px; font-size: 18px; background: #007bff; color: white; border: none; border-radius: 8px; z-index: 10; }
+        #bake-button { background: #28a745; display: none; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/exporters/GLTFExporter.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+    <div id="info">Tap Start → Allow camera → Scan flat surfaces slowly!</div>
+    <button id="ar-button">Start AR Scan</button>
+    <button id="bake-button">Bake & Download Room GLB</button>
+
+    <script>
+        let scene, camera, renderer, grid, hitTestSource = null, hitTestSourceRequested = false;
+        let planes = [], meshes = [], xrSession = null, model = null, virtualScene = null, controls = null;
+        const info = document.getElementById('info');
+        const arBtn = document.getElementById('ar-button');
+        const bakeBtn = document.getElementById('bake-button');
+
+        // Only init Three.js basics – no heavy loop yet
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.xr.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        const light = new THREE.HemisphereLight(0xffffff, 0x444444, 3);
+        scene.add(light);
+
+        grid = new THREE.GridHelper(4, 20, 0x00ff00, 0x00ff00);
+        grid.rotation.x = -Math.PI / 2;
+        grid.visible = false;
+        scene.add(grid);
+
+        // Load model (optional)
+        new THREE.GLTFLoader().load('https://threejs.org/examples/models/gltf/DamagedHelmet/glTF/DamagedHelmet.gltf', gltf => {
+            model = gltf.scene;
+            model.scale.set(0.2, 0.2, 0.2);
+        });
+
+        arBtn.onclick = async () => {
+            try {
+                xrSession = await navigator.xr.requestSession('immersive-ar', {
+                    requiredFeatures: ['hit-test'],
+                    optionalFeatures: ['dom-overlay', 'light-estimation', 'plane-detection']
+                });
+                renderer.xr.setSession(xrSession);
+                arBtn.style.display = 'none';
+                bakeBtn.style.display = 'block';
+                info.textContent = 'Scanning... Move slowly around room!';
+                animate(); // Start rendering ONLY now
+            } catch (e) {
+                alert('AR failed: ' + e.message + '\nNeed Chrome + Android + HTTPS');
+            }
+        };
+
+        bakeBtn.onclick = () => {
+            // Simple bake: export current scene as GLB
+            virtualScene = scene.clone();
+            const exporter = new THREE.GLTFExporter();
+            exporter.parse(virtualScene, glb => {
+                const blob = new Blob([glb], {type: 'application/octet-stream'});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'my-room-scan.glb';
+                a.click();
+            }, {binary: true});
+            info.textContent = 'Room exported! Check downloads.';
+        };
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        function handleHitTest(frame) {
+            if (!hitTestSourceRequested) {
+                xrSession.requestReferenceSpace('viewer').then(ref => {
+                    xrSession.requestHitTestSource({space: ref}).then(src => hitTestSource = src);
+                });
+                hitTestSourceRequested = true;
+            }
+            if (hitTestSource && frame) {
+                const results = frame.getHitTestResults(hitTestSource);
+                if (results.length) {
+                    const pose = results[0].getPose(renderer.xr.getReferenceSpace());
+                    grid.matrix.fromArray(pose.transform.matrix);
+                    grid.visible = true;
+                    info.textContent = 'Surface found! Keep scanning...';
+                }
+            }
+        }
+
+        function animate() {
+            renderer.setAnimationLoop((time, frame) => {
+                if (frame) handleHitTest(frame);
+                renderer.render(scene, camera);
+            });
+        }
+    </script>
+</body>
+</html>
